@@ -44,12 +44,15 @@ endif
 BOOT_SRC  := boot/boot.asm
 BOOT_BIN  := boot/boot.bin
 
-KERNEL_ASM_SRC := kernel/kernel_entry.asm
-KERNEL_ASM_OBJ := build/kernel_entry.o
+KERNEL_ASM_SRCS := kernel/kernel_entry.asm kernel/switch.asm
+KERNEL_ASM_OBJS := $(patsubst kernel/%.asm, build/%.o, $(KERNEL_ASM_SRCS))
 
 KERNEL_C_SRCS  := kernel/kernel.c \
                    kernel/vga.c    \
-                   kernel/keyboard.c
+                   kernel/keyboard.c \
+                   kernel/idt.c    \
+                   kernel/process.c \
+                   kernel/scheduler.c
 
 # Add your new source files below as the course progresses:
 # Lecture 09: kernel/process.c kernel/scheduler.c
@@ -84,7 +87,7 @@ $(BOOT_BIN): $(BOOT_SRC)
 # ---------------------------------------------------------------------------
 # Kernel: Assembly object
 # ---------------------------------------------------------------------------
-$(KERNEL_ASM_OBJ): $(KERNEL_ASM_SRC)
+build/%.o: kernel/%.asm
 	@mkdir -p build
 	@echo "  [AS]  $<"
 	$(AS) $(ASFLAGS) $< -o $@
@@ -100,7 +103,7 @@ build/%.o: kernel/%.c
 # ---------------------------------------------------------------------------
 # Link kernel ELF, then extract flat binary
 # ---------------------------------------------------------------------------
-$(KERNEL_ELF): $(KERNEL_ASM_OBJ) $(KERNEL_C_OBJS)
+$(KERNEL_ELF): $(KERNEL_ASM_OBJS) $(KERNEL_C_OBJS)
 	@echo "  [LD]  $@"
 	$(LD) $(LDFLAGS) -T linker.ld $^ -o $@
 

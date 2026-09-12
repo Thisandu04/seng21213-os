@@ -122,6 +122,19 @@ void vga_set_cursor(int row, int col) {
     update_hw_cursor();
 }
 
+/* Write a string directly to fixed cells WITHOUT touching cursor_row,
+ * cursor_col, cur_attr, or the hardware cursor. Safe for use by
+ * background processes that must not disturb sequential shell output. */
+void vga_print_at(int row, int col, const char *str, vga_color_t fg, vga_color_t bg) {
+    uint8_t attr = VGA_ATTR(fg, bg);
+    int c = col;
+    while (*str && c < VGA_COLS) {
+        vga_write_cell(row, c, *str, attr);
+        str++;
+        c++;
+    }
+}
+
 /* Minimal vga_printf: supports %s, %c, %d, %u, %x */
 static void print_uint(uint32_t n, int base) {
     char buf[32];
