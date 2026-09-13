@@ -15,8 +15,10 @@ typedef enum {
     PROC_UNUSED = 0,
     PROC_READY,
     PROC_RUNNING,
+    PROC_BLOCKED,       /* NEW — waiting on a mutex/semaphore */
     PROC_TERMINATED
 } proc_state_t;
+
 
 typedef struct pcb {
     uint32_t     esp;      /* MUST be first field — switch.asm reads offset 0 */
@@ -30,5 +32,6 @@ typedef struct pcb {
 void   process_init(void);
 int    create_process(void (*entry_fn)(void), const char *name);
 pcb_t *process_table_get(int index);
+pcb_t *process_alloc(const char *name);  /* NEW — shared slot allocator */
 
 #endif /* PROCESS_H */

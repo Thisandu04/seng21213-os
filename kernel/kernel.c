@@ -3,12 +3,16 @@
  * File   : kernel/kernel.c
  * ============================================================================*/
 
+ #define RACE_ITER 60
 #include "vga.h"
 #include "keyboard.h"
 #include "idt.h"
 #include "process.h"
 #include "scheduler.h"
 #include "../include/types.h"
+#include "thread.h"
+#include "mutex.h"
+#include "semaphore.h"
 
 static void cmd_help(void);
 static void cmd_clear(void);
@@ -92,6 +96,8 @@ static void cmd_help(void) {
     vga_puts("  free    - [L11] Show free memory\n");
     vga_puts("  ls      - [L12] List files\n");
     vga_puts("  cat     - [L12] Print file contents\n\n");
+    vga_puts_color("  race    - [L10] Race condition demo (with/without mutex)\n", VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_puts_color("  pcdemo  - [L10] Producer-consumer demo (3 semaphores)\n", VGA_LIGHT_GREEN, VGA_BLACK);
 }
 
 static void cmd_clear(void) { vga_clear(VGA_BLACK); }
@@ -128,8 +134,9 @@ static void cmd_ps(void) {
     for (i = 0; i < MAX_PROCESSES; i++) {
         pcb_t *p = process_table_get(i);
         if (p->state == PROC_UNUSED) continue;
-        const char *s = (p->state == PROC_RUNNING) ? "RUNNING" :
-                         (p->state == PROC_READY)   ? "READY  " : "DEAD   ";
+       const char *s = (p->state == PROC_RUNNING) ? "RUNNING" :
+                 (p->state == PROC_READY)   ? "READY  " :
+                 (p->state == PROC_BLOCKED) ? "BLOCKED" : "DEAD   ";
         k_itoa((int)p->pid, pidbuf);
         vga_puts("  "); vga_puts(pidbuf);
         vga_puts("    "); vga_puts(s);
@@ -139,6 +146,167 @@ static void cmd_ps(void) {
     vga_puts("\n");
 }
 
+/* ---------------------------------------------------------------------------
+ * L10 Demo 1: race condition on a shared global, with and without a mutex
+ * --------------------------------------------------------------------------*/
+
+static volatile long myglobal;
+static volatile int  race_done_flags[2];
+static mutex_t       race_mutex;
+
+
+static inline void force_yield(void) {
+    __asm__ volatile ("int $0x20" ::: "memory", "cc");
+}
+
+static void racer_unsafe(void *arg) {
+    int id = (int)(long)arg;
+    int i;
+    char dbg[16];
+    for (i = 0; i < RACE_ITER; i++) {
+        long tmp = myglobal;
+        force_yield();
+        tmp = tmp + 1;
+        myglobal = tmp;
+
+        if (i % 200 == 0) {
+            k_itoa(i, dbg);
+            if (id == 0) vga_print_at(23, 0,  dbg, VGA_WHITE, VGA_BLACK);
+            else         vga_print_at(23, 20, dbg, VGA_WHITE, VGA_BLACK);
+        }
+    }
+    race_done_flags[id] = 1;
+    if (id == 0) vga_print_at(23, 0,  "A-DONE", VGA_WHITE, VGA_RED);
+    else         vga_print_at(23, 20, "B-DONE", VGA_WHITE, VGA_RED);
+}
+
+static void racer_safe(void *arg) {
+    int id = (int)(long)arg;
+    int i;
+    char dbg[16];
+    for (i = 0; i < RACE_ITER; i++) {
+        mutex_lock(&race_mutex);
+        long tmp = myglobal;
+        force_yield();
+        tmp = tmp + 1;
+        myglobal = tmp;
+        mutex_unlock(&race_mutex);
+
+        if (i % 200 == 0) {
+            k_itoa(i, dbg);
+            if (id == 0) vga_print_at(21, 0,  dbg, VGA_WHITE, VGA_BLACK);
+            else         vga_print_at(21, 20, dbg, VGA_WHITE, VGA_BLACK);
+        }
+    }
+    race_done_flags[id] = 1;
+    if (id == 0) vga_print_at(21, 0,  "C-DONE", VGA_WHITE, VGA_GREEN);
+    else         vga_print_at(21, 20, "D-DONE", VGA_WHITE, VGA_GREEN);
+}
+
+static void cmd_race(void) {
+    long expected = (long)RACE_ITER * 2;   /* now = 4000 */
+    char buf[16];
+
+    vga_puts_color("\n  Race Condition Demo (L10 - myglobal, WITHOUT mutex)\n",
+                   VGA_YELLOW, VGA_BLACK);
+    vga_puts("  Two threads each increment myglobal 60 times...\n");
+
+    myglobal = 0; race_done_flags[0] = 0; race_done_flags[1] = 0;
+    thread_create(racer_unsafe, (void *)0, "racer_a");
+    thread_create(racer_unsafe, (void *)1, "racer_b");
+    while (!race_done_flags[0] || !race_done_flags[1]) { __asm__ volatile ("hlt"); }
+
+    vga_puts("  Expected total: "); k_itoa((int)expected, buf); vga_puts(buf); vga_puts("\n");
+    vga_puts_color("  Actual total:   ", VGA_LIGHT_RED, VGA_BLACK);
+    k_itoa((int)myglobal, buf); vga_puts_color(buf, VGA_LIGHT_RED, VGA_BLACK);
+    if (myglobal != expected)
+        vga_puts_color("   <-- LOST UPDATES (race condition)\n", VGA_LIGHT_RED, VGA_BLACK);
+    else
+        vga_puts("   (no corruption this run - timing dependent, try again)\n");
+
+    vga_puts_color("\n  Same demo WITH mutex protection:\n", VGA_YELLOW, VGA_BLACK);
+    mutex_init(&race_mutex);
+    myglobal = 0; race_done_flags[0] = 0; race_done_flags[1] = 0;
+    thread_create(racer_safe, (void *)0, "racer_c");
+    thread_create(racer_safe, (void *)1, "racer_d");
+    while (!race_done_flags[0] || !race_done_flags[1]) { __asm__ volatile ("hlt"); }
+
+    vga_puts("  Expected total: "); k_itoa((int)expected, buf); vga_puts(buf); vga_puts("\n");
+    vga_puts_color("  Actual total:   ", VGA_LIGHT_GREEN, VGA_BLACK);
+    k_itoa((int)myglobal, buf); vga_puts_color(buf, VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_puts_color("   <-- CORRECT (mutex prevented the race)\n\n", VGA_LIGHT_GREEN, VGA_BLACK);
+}
+
+/* ---------------------------------------------------------------------------
+ * L10 Demo 2: bounded-buffer producer-consumer, three semaphores
+ * --------------------------------------------------------------------------*/
+#define PC_BUF_SIZE 4
+#define PC_ITEMS    12
+
+static int          pc_buffer[PC_BUF_SIZE];
+static int          pc_in, pc_out;
+static semaphore_t  pc_empty, pc_full, pc_mutex;
+static volatile int pc_done_flags[2];
+
+static void pc_producer(void *arg) {
+    (void)arg;
+    int i;
+    for (i = 1; i <= PC_ITEMS; i++) {
+        sem_wait(&pc_empty);
+        sem_wait(&pc_mutex);
+
+        pc_buffer[pc_in] = i;
+        pc_in = (pc_in + 1) % PC_BUF_SIZE;
+
+        char buf[8]; k_itoa(i, buf);
+        vga_puts_color("  [producer] made item ", VGA_LIGHT_CYAN, VGA_BLACK);
+        vga_puts_color(buf, VGA_LIGHT_CYAN, VGA_BLACK);
+        vga_puts("\n");
+
+        sem_signal(&pc_mutex);
+        sem_signal(&pc_full);
+    }
+    pc_done_flags[0] = 1;
+}
+
+static void pc_consumer(void *arg) {
+    (void)arg;
+    int i;
+    for (i = 1; i <= PC_ITEMS; i++) {
+        sem_wait(&pc_full);
+        sem_wait(&pc_mutex);
+
+        int item = pc_buffer[pc_out];
+        pc_out = (pc_out + 1) % PC_BUF_SIZE;
+
+        char buf[8]; k_itoa(item, buf);
+        vga_puts_color("  [consumer] took item  ", VGA_LIGHT_MAGENTA, VGA_BLACK);
+        vga_puts_color(buf, VGA_LIGHT_MAGENTA, VGA_BLACK);
+        vga_puts("\n");
+
+        sem_signal(&pc_mutex);
+        sem_signal(&pc_empty);
+    }
+    pc_done_flags[1] = 1;
+}
+
+static void cmd_pc(void) {
+    vga_puts_color("\n  Producer-Consumer Demo (L10 - bounded buffer, 3 semaphores)\n",
+                   VGA_YELLOW, VGA_BLACK);
+    pc_in = 0; pc_out = 0;
+    pc_done_flags[0] = 0; pc_done_flags[1] = 0;
+    sem_init(&pc_empty, PC_BUF_SIZE);
+    sem_init(&pc_full, 0);
+    sem_init(&pc_mutex, 1);
+
+    thread_create(pc_producer, 0, "producer");
+    thread_create(pc_consumer, 0, "consumer");
+
+    while (!pc_done_flags[0] || !pc_done_flags[1]) { __asm__ volatile ("hlt"); }
+
+    vga_puts_color("\n  Done - all items produced and consumed in order, no corruption.\n\n",
+                   VGA_LIGHT_GREEN, VGA_BLACK);
+}
 /* ---------------------------------------------------------------------------
  * Demo processes - visible proof that preemptive multitasking is working
  * --------------------------------------------------------------------------*/
@@ -205,6 +373,8 @@ static void shell_run(void) {
         if (k_strcmp(cmd, "about") == 0) { cmd_about(); continue; }
         if (k_strcmp(cmd, "mem")   == 0) { cmd_mem();   continue; }
         if (k_strcmp(cmd, "ps")    == 0) { cmd_ps();    continue; }
+        if (k_strcmp(cmd, "race")   == 0) { cmd_race(); continue; }
+        if (k_strcmp(cmd, "pcdemo") == 0) { cmd_pc();   continue; }
 
         if (k_strncmp(cmd, "echo ", 5) == 0) {
             cmd_echo(k_ltrim(cmd + 5));

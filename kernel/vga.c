@@ -6,6 +6,7 @@
  * ============================================================================*/
 #include "vga.h"
 #include "../include/types.h"
+#define VGA_TEXT_ROWS (VGA_ROWS - 1)  /* row 24 reserved for live status counters — never scrolled */
 
 /* ---------------------------------------------------------------------------
  * Internal state
@@ -40,19 +41,18 @@ static inline void vga_write_cell(int row, int col, char c, uint8_t attr) {
  * Scroll the screen up by one line when the cursor goes past row 24
  * --------------------------------------------------------------------------*/
 static void scroll_up(void) {
-    /* Move every row up by one */
     volatile uint16_t *vga = VGA_ADDR;
-    for (int r = 0; r < VGA_ROWS - 1; r++) {
-        for (int c = 0; c < VGA_COLS; c++) {
+    int r, c;
+    for (r = 0; r < VGA_TEXT_ROWS - 1; r++) {
+        for (c = 0; c < VGA_COLS; c++) {
             vga[r * VGA_COLS + c] = vga[(r + 1) * VGA_COLS + c];
         }
     }
-    /* Blank the last row */
     uint16_t blank = (uint16_t)((cur_attr << 8) | ' ');
-    for (int c = 0; c < VGA_COLS; c++) {
-        vga[(VGA_ROWS - 1) * VGA_COLS + c] = blank;
+    for (c = 0; c < VGA_COLS; c++) {
+        vga[(VGA_TEXT_ROWS - 1) * VGA_COLS + c] = blank;
     }
-    cursor_row = VGA_ROWS - 1;
+    cursor_row = VGA_TEXT_ROWS - 1;
 }
 
 /* ---------------------------------------------------------------------------
@@ -100,7 +100,7 @@ void vga_putchar(char c) {
         if (cursor_col >= VGA_COLS) { cursor_col = 0; cursor_row++; }
     }
 
-    if (cursor_row >= VGA_ROWS) scroll_up();
+  if (cursor_row >= VGA_TEXT_ROWS) scroll_up();
     update_hw_cursor();
 }
 

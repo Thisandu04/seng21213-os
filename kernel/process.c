@@ -25,31 +25,15 @@ void process_init(void) {
  * Layout must exactly match what PUSHAD + a hardware interrupt produce,
  * since switch.asm resumes execution via POPAD + IRETD. */
 int create_process(void (*entry_fn)(void), const char *name) {
-    int slot = -1;
-    int i;
-    for (i = 0; i < MAX_PROCESSES; i++) {
-        if (process_table[i].state == PROC_UNUSED) { slot = i; break; }
-    }
-    if (slot == -1) return -1;
+    pcb_t *p = process_alloc(name);
+    if (!p) return -1;
 
-    pcb_t *p = &process_table[slot];
-    p->pid   = next_pid++;
     p->entry = (uint32_t)entry_fn;
-    p_strncpy(p->name, name, sizeof(p->name));
-
     uint32_t *sp = (uint32_t *)(p->stack + STACK_SIZE);
 
-    *(--sp) = 0x202;               /* EFLAGS — IF=1, interrupts stay enabled */
-    *(--sp) = 0x08;                /* CS — kernel code selector (VERIFY vs boot.asm GDT) */
-    *(--sp) = (uint32_t)entry_fn;  /* EIP — where execution begins */
-    *(--sp) = 0; /* EAX */
-    *(--sp) = 0; /* ECX */
-    *(--sp) = 0; /* EDX */
-    *(--sp) = 0; /* EBX */
-    *(--sp) = 0; /* ESP — dummy, POPAD discards this slot */
-    *(--sp) = 0; /* EBP */
-    *(--sp) = 0; /* ESI */
-    *(--sp) = 0; /* EDI */
+    *(--sp) = 0x202; *(--sp) = 0x08; *(--sp) = (uint32_t)entry_fn;
+    *(--sp) = 0; *(--sp) = 0; *(--sp) = 0; *(--sp) = 0;
+    *(--sp) = 0; *(--sp) = 0; *(--sp) = 0; *(--sp) = 0;
 
     p->esp   = (uint32_t)sp;
     p->state = PROC_READY;
@@ -59,4 +43,23 @@ int create_process(void (*entry_fn)(void), const char *name) {
 pcb_t *process_table_get(int index) {
     if (index < 0 || index >= MAX_PROCESSES) return 0;
     return &process_table[index];
+}
+
+/* Finds a free slot and reserves it (pid + name only — caller must build
+ * the stack frame and set state = PROC_READY once ready to run).
+ * TERMINATED slots are reclaimable too: once a thread hits thread_exit(),
+ * it will NEVER run again on our single CPU, so it's safe for a different
+ * currently-running thread to recycle its slot. */
+pcb_t *process_alloc(const char *name) {
+    int i;
+    for (i = 0; i < MAX_PROCESSES; i++) {
+        if (process_table[i].state == PROC_UNUSED ||
+            process_table[i].state == PROC_TERMINATED) {
+            pcb_t *p = &process_table[i];
+            p->pid = next_pid++;
+            p_strncpy(p->name, name, sizeof(p->name));
+            return p;
+        }
+    }
+    return 0;
 }

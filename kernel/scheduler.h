@@ -5,7 +5,11 @@
 #ifndef SCHEDULER_H
 #define SCHEDULER_H
 
+#include "process.h"
+
+extern pcb_t *current_process;   /* NEW */
+
 void scheduler_init(void);
 void scheduler_run(void);
 
-#endif /* SCHEDULER_H */
+#endif
