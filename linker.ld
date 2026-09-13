@@ -28,11 +28,14 @@ SECTIONS {
 
     .bss : {
         *(COMMON)
-        *(.bss)           /* Uninitialised data – zeroed by convention */
+        *(.bss)           /* Uninitialised data - zeroed by convention */
     }
 
+    . = ALIGN(4096);
+    kernel_end = .;       /* Lecture 11: PMM uses this to reserve kernel's own frames */
+
     /DISCARD/ : {
-        *(.eh_frame)      /* Exception frames – not needed in a bare kernel */
+        *(.eh_frame)      /* Exception frames - not needed in a bare kernel */
         *(.comment)
     }
 }

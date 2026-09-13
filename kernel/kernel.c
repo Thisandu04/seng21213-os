@@ -13,6 +13,7 @@
 #include "thread.h"
 #include "mutex.h"
 #include "semaphore.h"
+#include "pmm.h"
 
 static void cmd_help(void);
 static void cmd_clear(void);
@@ -98,6 +99,8 @@ static void cmd_help(void) {
     vga_puts("  cat     - [L12] Print file contents\n\n");
     vga_puts_color("  race    - [L10] Race condition demo (with/without mutex)\n", VGA_LIGHT_GREEN, VGA_BLACK);
     vga_puts_color("  pcdemo  - [L10] Producer-consumer demo (3 semaphores)\n", VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_puts_color("  meminfo - [L11] Show physical memory totals\n", VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_puts_color("  memtest - [L11] Alloc/free 100 frames, verify no leaks\n", VGA_LIGHT_GREEN, VGA_BLACK);
 }
 
 static void cmd_clear(void) { vga_clear(VGA_BLACK); }
@@ -124,6 +127,51 @@ static void cmd_mem(void) {
     vga_puts("  0x00000000 - 0x000FFFFF  :  First 1 MB (reserved/BIOS)\n");
     vga_puts("  0x00100000 - 0x00EFFFFF  :  Extended memory (usable ~14 MB)\n");
     vga_puts("  0xB8000    - 0xBFFFF     :  VGA frame buffer\n\n");
+}
+
+static void cmd_meminfo(void) {
+    char buf[16];
+    uint32_t total = pmm_total_frames();
+    uint32_t used  = pmm_used_frames();
+    uint32_t free  = pmm_free_frames();
+
+    vga_puts_color("\n  Physical Memory Manager (L11)\n", VGA_YELLOW, VGA_BLACK);
+    vga_puts("  -----------------------------------------\n");
+    vga_puts("  Total: "); k_itoa((int)total, buf); vga_puts(buf);
+    vga_puts(" frames ("); k_itoa((int)(total * FRAME_SIZE / 1024), buf); vga_puts(buf); vga_puts(" KB)\n");
+    vga_puts("  Used:  "); k_itoa((int)used, buf); vga_puts(buf);
+    vga_puts(" frames ("); k_itoa((int)(used * FRAME_SIZE / 1024), buf); vga_puts(buf); vga_puts(" KB)\n");
+    vga_puts("  Free:  "); k_itoa((int)free, buf); vga_puts(buf);
+    vga_puts(" frames ("); k_itoa((int)(free * FRAME_SIZE / 1024), buf); vga_puts(buf); vga_puts(" KB)\n\n");
+}
+
+static void cmd_memtest(void) {
+    static uint32_t addrs[100];
+    uint32_t free_before = pmm_free_frames();
+    int i;
+    char buf[16];
+
+    vga_puts_color("\n  PMM Alloc/Free Test (100 frames)\n", VGA_YELLOW, VGA_BLACK);
+    vga_puts("  Free before: "); k_itoa((int)free_before, buf); vga_puts(buf); vga_puts("\n");
+
+    for (i = 0; i < 100; i++) {
+        addrs[i] = pmm_alloc_frame();
+        if (addrs[i] == 0) {
+            vga_puts_color("  ERROR: allocation failed!\n\n", VGA_LIGHT_RED, VGA_BLACK);
+            return;
+        }
+    }
+    uint32_t free_mid = pmm_free_frames();
+    vga_puts("  Free after 100 allocs: "); k_itoa((int)free_mid, buf); vga_puts(buf); vga_puts("\n");
+
+    for (i = 0; i < 100; i++) pmm_free_frame(addrs[i]);
+    uint32_t free_after = pmm_free_frames();
+    vga_puts("  Free after freeing all: "); k_itoa((int)free_after, buf); vga_puts(buf); vga_puts("\n");
+
+    if (free_after == free_before)
+        vga_puts_color("  PASS - no leaks, free count returned to baseline.\n\n", VGA_LIGHT_GREEN, VGA_BLACK);
+    else
+        vga_puts_color("  FAIL - frame count mismatch (leak detected).\n\n", VGA_LIGHT_RED, VGA_BLACK);
 }
 
 static void cmd_ps(void) {
@@ -375,6 +423,8 @@ static void shell_run(void) {
         if (k_strcmp(cmd, "ps")    == 0) { cmd_ps();    continue; }
         if (k_strcmp(cmd, "race")   == 0) { cmd_race(); continue; }
         if (k_strcmp(cmd, "pcdemo") == 0) { cmd_pc();   continue; }
+        if (k_strcmp(cmd, "meminfo") == 0) { cmd_meminfo(); continue; }
+        if (k_strcmp(cmd, "memtest") == 0) { cmd_memtest(); continue; }
 
         if (k_strncmp(cmd, "echo ", 5) == 0) {
             cmd_echo(k_ltrim(cmd + 5));
@@ -404,6 +454,7 @@ void kernel_main(void) {
     vga_init();
     kb_init();
     idt_init();
+    pmm_init();
     print_splash();
 
     process_init();
