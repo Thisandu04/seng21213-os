@@ -67,7 +67,7 @@ init_pm32:
     mov  fs, ax
     mov  gs, ax
 
-    mov  ebp, 0x90000
+    mov  ebp, 0x300000
     mov  esp, ebp
 
     call 0x10000

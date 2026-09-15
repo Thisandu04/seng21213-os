@@ -14,6 +14,8 @@
 #include "mutex.h"
 #include "semaphore.h"
 #include "pmm.h"
+#include "fs.h"
+#include "ramdisk.h"
 
 static void cmd_help(void);
 static void cmd_clear(void);
@@ -101,6 +103,12 @@ static void cmd_help(void) {
     vga_puts_color("  pcdemo  - [L10] Producer-consumer demo (3 semaphores)\n", VGA_LIGHT_GREEN, VGA_BLACK);
     vga_puts_color("  meminfo - [L11] Show physical memory totals\n", VGA_LIGHT_GREEN, VGA_BLACK);
     vga_puts_color("  memtest - [L11] Alloc/free 100 frames, verify no leaks\n", VGA_LIGHT_GREEN, VGA_BLACK);
+
+    vga_puts_color("  ls      - [L12] List files\n",              VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_puts_color("  touch   - [L12] Create an empty file\n",    VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_puts_color("  cat     - [L12] Print file contents\n",     VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_puts_color("  write   - [L12] Append text to a file\n",   VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_puts_color("  rm      - [L12] Remove a file\n",           VGA_LIGHT_GREEN, VGA_BLACK);
 }
 
 static void cmd_clear(void) { vga_clear(VGA_BLACK); }
@@ -192,6 +200,84 @@ static void cmd_ps(void) {
         vga_puts("\n");
     }
     vga_puts("\n");
+}
+
+static void cmd_ls(void) {
+    char names[20][MAX_FILENAME];
+    uint32_t sizes[20];
+    int count = fs_list(names, sizes, 20);
+    int i, pad;
+    char buf[12];
+
+    vga_puts_color("\n  NAME                          SIZE\n", VGA_YELLOW, VGA_BLACK);
+    vga_puts("  --------------------------------------\n");
+    if (count == 0) { vga_puts("  (no files)\n\n"); return; }
+    for (i = 0; i < count; i++) {
+        vga_puts("  "); vga_puts(names[i]);
+        pad = 28 - (int)k_strlen(names[i]);
+        while (pad-- > 0) vga_putchar(' ');
+        k_itoa((int)sizes[i], buf); vga_puts(buf); vga_puts(" bytes\n");
+    }
+    vga_puts("\n");
+}
+
+static void cmd_touch(const char *args) {
+    int fd;
+    if (k_strlen(args) == 0) { vga_puts_color("  Usage: touch <name>\n", VGA_LIGHT_RED, VGA_BLACK); return; }
+    fd = fs_open(args);
+    if (fd < 0) { vga_puts_color("  touch: failed\n", VGA_LIGHT_RED, VGA_BLACK); return; }
+    fs_close(fd);
+    vga_puts("  Created: "); vga_puts(args); vga_puts("\n");
+}
+
+static void cmd_cat(const char *args) {
+    char buf[256];
+    int n, fd;
+    if (k_strlen(args) == 0) { vga_puts_color("  Usage: cat <name>\n", VGA_LIGHT_RED, VGA_BLACK); return; }
+    if (!fs_exists(args)) {
+        vga_puts_color("  cat: no such file: ", VGA_LIGHT_RED, VGA_BLACK);
+        vga_puts_color(args, VGA_LIGHT_RED, VGA_BLACK); vga_puts("\n");
+        return;
+    }
+    fd = fs_open(args);
+    vga_puts("\n");
+    while ((n = fs_read(fd, buf, sizeof(buf) - 1)) > 0) { buf[n] = '\0'; vga_puts(buf); }
+    vga_puts("\n");
+    fs_close(fd);
+}
+
+static void cmd_write(const char *args) {
+    char name[MAX_FILENAME];
+    const char *p = args;
+    int i = 0, fd, n;
+    char nbuf[12];
+
+    if (k_strlen(args) == 0) { vga_puts_color("  Usage: write <name> <text>\n", VGA_LIGHT_RED, VGA_BLACK); return; }
+    while (*p && *p != ' ' && i < MAX_FILENAME - 1) name[i++] = *p++;
+    name[i] = '\0';
+    if (*p == ' ') p++;
+
+    if (k_strlen(name) == 0) { vga_puts_color("  Usage: write <name> <text>\n", VGA_LIGHT_RED, VGA_BLACK); return; }
+
+    fd = fs_open(name);
+    if (fd < 0) { vga_puts_color("  write: failed to open/create file\n", VGA_LIGHT_RED, VGA_BLACK); return; }
+
+    n = fs_write(fd, p, k_strlen(p));
+    fs_close(fd);
+
+    vga_puts("  Wrote "); k_itoa(n, nbuf); vga_puts(nbuf);
+    vga_puts(" bytes to "); vga_puts(name); vga_puts("\n");
+}
+
+static void cmd_rm(const char *args) {
+    if (k_strlen(args) == 0) { vga_puts_color("  Usage: rm <name>\n", VGA_LIGHT_RED, VGA_BLACK); return; }
+    if (!fs_exists(args)) {
+        vga_puts_color("  rm: no such file: ", VGA_LIGHT_RED, VGA_BLACK);
+        vga_puts_color(args, VGA_LIGHT_RED, VGA_BLACK); vga_puts("\n");
+        return;
+    }
+    fs_unlink(args);
+    vga_puts("  Removed: "); vga_puts(args); vga_puts("\n");
 }
 
 /* ---------------------------------------------------------------------------
@@ -426,6 +512,13 @@ static void shell_run(void) {
         if (k_strcmp(cmd, "meminfo") == 0) { cmd_meminfo(); continue; }
         if (k_strcmp(cmd, "memtest") == 0) { cmd_memtest(); continue; }
 
+        if (k_strcmp(cmd, "ls") == 0) { cmd_ls(); continue; }
+
+        if (k_strncmp(cmd, "touch ", 6) == 0) { cmd_touch(k_ltrim(cmd + 6)); continue; }
+        if (k_strncmp(cmd, "cat ",   4) == 0) { cmd_cat(k_ltrim(cmd + 4));   continue; }
+        if (k_strncmp(cmd, "write ", 6) == 0) { cmd_write(k_ltrim(cmd + 6)); continue; }
+        if (k_strncmp(cmd, "rm ",    3) == 0) { cmd_rm(k_ltrim(cmd + 3));    continue; }
+
         if (k_strncmp(cmd, "echo ", 5) == 0) {
             cmd_echo(k_ltrim(cmd + 5));
             continue;
@@ -433,9 +526,7 @@ static void shell_run(void) {
 
         if (k_strcmp(cmd, "kill")    == 0 ||
             k_strcmp(cmd, "threads") == 0 ||
-            k_strcmp(cmd, "free")    == 0 ||
-            k_strcmp(cmd, "ls")      == 0 ||
-            k_strcmp(cmd, "cat")     == 0) {
+            k_strcmp(cmd, "free")    == 0) {
             vga_puts_color("  [TODO] This command is not yet implemented.\n",
                            VGA_YELLOW, VGA_BLACK);
             continue;
@@ -455,6 +546,7 @@ void kernel_main(void) {
     kb_init();
     idt_init();
     pmm_init();
+     fs_init();
     print_splash();
 
     process_init();
